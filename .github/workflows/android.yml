@@ -12,16 +12,73 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Locate and Move Nested Project Files
+    - name: Ensure Root Gradle Build Files Exist
       run: |
-        if [ ! -f "settings.gradle" ]; then
-          FOUND_DIR=$(find . -name "settings.gradle" -not -path "*/.*" -exec dirname {} \; | head -n 1)
-          if [ -n "$FOUND_DIR" ] && [ "$FOUND_DIR" != "." ]; then
-            echo "Found settings.gradle inside $FOUND_DIR. Relocating files..."
-            cp -r $FOUND_DIR/* . 2>/dev/null || true
-            cp -r $FOUND_DIR/.* . 2>/dev/null || true
-          fi
+        # Search for nested project directories and move files to root if needed
+        FOUND_DIR=$(find . -maxdepth 3 -name "settings.gradle" -not -path "*/.*" -exec dirname {} \; | head -n 1)
+        if [ -n "$FOUND_DIR" ] && [ "$FOUND_DIR" != "." ]; then
+          echo "Relocating files from $FOUND_DIR to root..."
+          cp -r $FOUND_DIR/* . 2>/dev/null || true
+          cp -r $FOUND_DIR/.* . 2>/dev/null || true
         fi
+
+        # Auto-create settings.gradle if missing
+        if [ ! -f "settings.gradle" ]; then
+          echo "Creating settings.gradle..."
+          echo "pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }" > settings.gradle
+          echo "dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }" >> settings.gradle
+          echo "rootProject.name = 'ESP32 Security'" >> settings.gradle
+          echo "include ':app'" >> settings.gradle
+        fi
+
+        # Auto-create root build.gradle if missing
+        if [ ! -f "build.gradle" ]; then
+          echo "Creating root build.gradle..."
+          echo "plugins { id 'com.android.application' version '8.1.1' apply false }" > build.gradle
+        fi
+
+        # Auto-create app/build.gradle if missing
+        mkdir -p app
+        if [ ! -f "app/build.gradle" ]; then
+          echo "Creating app/build.gradle..."
+          cat << 'EOF' > app/build.gradle
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.example.esp32security'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.esp32security"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.9.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+}
+EOF
+        fi
+
+        touch app/proguard-rules.pro
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -34,14 +91,10 @@ jobs:
       with:
         gradle-version: '8.2'
 
-    - name: Create Missing Files and Accept Android Licenses
+    - name: Generate Gradle Wrapper & Accept Licenses
       run: |
-        mkdir -p app
-        touch app/proguard-rules.pro
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-
-    - name: Generate Gradle Wrapper
-      run: gradle wrapper --gradle-version 8.2
+        gradle wrapper --gradle-version 8.2
 
     - name: Build APK with Gradle
       run: |
